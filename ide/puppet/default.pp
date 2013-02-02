@@ -53,6 +53,43 @@ class mingw-w64 {
   }
 }
 
+class mingw32ce {
+  exec { 'mingw32ce-mk-2012-03-13-i386.tar.bz2':
+    command => '/usr/bin/wget http://max.kellermann.name/download/xcsoar/devel/cegcc/mingw32ce-mk-2012-03-13-i386.tar.bz2',
+    cwd => '/home/vagrant/',
+    creates => '/home/vagrant/mingw32ce-mk-2012-03-13-i386.tar.bz2',
+    user => 'vagrant',
+  }
+
+  exec { 'mingw32ce-mk-2012-03-13-i386':
+    command => '/bin/tar -xf mingw32ce-mk-2012-03-13-i386.tar.bz2',
+    cwd => '/home/vagrant/',
+    creates => '/home/vagrant/mingw32ce-mk-2012-03-13-i386/bin/arm-mingw32ce-g++',
+    user => 'vagrant',
+    require => Exec['mingw32ce-mk-2012-03-13-i386.tar.bz2'],
+  }
+
+  exec { 'mingw32ce-to-path':
+    command => '/bin/echo PATH="/home/vagrant/mingw32ce-mk-2012-03-13-i386/bin:\$PATH" >> .profile',
+    cwd => '/home/vagrant/',
+    require => Exec['mingw32ce-mk-2012-03-13-i386'],
+    unless => '/bin/grep mingw32ce .profile',
+  }
+
+  # Workaround for library version mismatch
+  exec { 'libmpfr-symlink':
+    command => '/bin/ln -s libmpfr.so.4 libmpfr.so.1',
+    cwd => '/usr/lib/i386-linux-gnu/',
+    creates => '/usr/lib/i386-linux-gnu/libmpfr.so.1',
+  }
+
+  exec { 'libgmp-symlink':
+    command => '/bin/ln -s libgmp.so.10 libgmp.so.3',
+    cwd => '/usr/lib/i386-linux-gnu/',
+    creates => '/usr/lib/i386-linux-gnu/libgmp.so.3',
+  }
+}
+
 class make {
   package { "make":
     ensure => present,
@@ -108,6 +145,9 @@ class {'ccache': }
 
 # MinGW Toolchain
 class {'mingw-w64': }
+
+# CeGCC Toolchain
+class {'mingw32ce': }
 
 # Resource tools
 class {'gettext': }
