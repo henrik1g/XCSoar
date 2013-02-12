@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+#include "Operation/Operation.hpp"
+#include <vector>
 
 /* Untertypen des Haupttyps Variabel */
 #define FLDPLT	     0x01
@@ -76,7 +78,8 @@ convert_gcs
   return value:
     length of binary file
 */
-int32 convert_gcs(int16, FILE *, uint8_t *, int16, word *, long *);
+int32 convert_gcs(int16, FILE *, uint8_t *, int16, word *, long *,
+                  OperationEnvironment &env);
 
 
 /*
@@ -97,13 +100,21 @@ struct DIRENTRY {
 
 struct DIRECTORY {
 	int nflights;
-	DIRENTRY *flights;
+	std::vector<DIRENTRY> flights;
 };
 
 
 //const int MAXDIRENTRY = 100;
 
-int conv_dir(DIRENTRY* flights, uint8_t *dirbuffer, int countonly);
+/**
+ * Converts binary flight list (called directory) data to a vector of
+ * logs. Each log entry of type DIRENTRY. This vector is returned.
+ * @param dirbuffer Pointer to the buffer containing the binary input data
+ * @param datalength The length of the data stored in buffer
+ */
+
+std::vector<DIRENTRY> conv_dir(uint8_t *dirbuffer, int32 datalength,
+                               OperationEnvironment &env);
 
 
 #endif

@@ -25,6 +25,10 @@
 #include "Protocol.hpp"
 #include "Operation/Operation.hpp"
 #include "Util/CharUtil.hpp"
+#include "OS/FileUtil.hpp"
+#include "Util/tstring.hpp"
+#include "Language/Language.hpp"
+
 
 #include <memory.h>
 #include <string.h>
@@ -52,7 +56,7 @@ VLA_ERROR
 VLA_XFR::dbbget(void *dbbbuffer, int32 dbbsize)
 {
   int groesse = Volkslogger::SendCommandReadBulk(*port, env,
-                                                 Volkslogger::cmd_RDB,
+                                                 Volkslogger::cmd_RDB, 1000,
                                                  dbbbuffer, dbbsize, databaud);
   env.Sleep(300);
   if (groesse <= 0)
@@ -60,25 +64,21 @@ VLA_XFR::dbbget(void *dbbbuffer, int32 dbbsize)
   return VLA_ERR_NOERR;
 }
 
-VLA_ERROR
+int
 VLA_XFR::readdir(void *buffer, int32 size) {
   if(buffer==0)
-    return VLA_ERR_MISC;
+    return -1;
 
-  int r = Volkslogger::SendCommandReadBulk(*port, env,
-                                           Volkslogger::cmd_DIR,
+  return Volkslogger::SendCommandReadBulk(*port, env,
+                                           Volkslogger::cmd_DIR, 1000,
                                            buffer, size);
-  if (r <= 0)
-    return VLA_ERR_NOFLIGHTS;
-  else
-    return VLA_ERR_NOERR;
 }
 
 VLA_ERROR
 VLA_XFR::all_logsget(void *dbbbuffer, int32 dbbsize)
 {
   int groesse = Volkslogger::SendCommandReadBulk(*port, env,
-                                                 Volkslogger::cmd_ERO,
+                                                 Volkslogger::cmd_ERO, 1000,
                                                  dbbbuffer, dbbsize, databaud);
   env.Sleep(300);
   if (groesse <= 0)
@@ -99,7 +99,23 @@ VLA_XFR::flightget(void *buffer, int32 buffersize,
   const Volkslogger::Command cmd = secmode
     ? Volkslogger::cmd_GFS
     : Volkslogger::cmd_GFL;
+
+  /*
+   * It is necessary to wait long for the first reply from
+   * the Logger in ReadBulk.
+   * Since the VL needs time to calculate the Security of
+   * the log before it responds.
+   */
+  unsigned timeout_firstchar_ms=300000;
+
+  /*
+   * Make user aware of the Volkslogger needing time to calculate
+   */
+  env.SetText(_("Logger is calculating file security before download starts."));
+
+  // Download binary log data supports BulkBaudrate
   int groesse = Volkslogger::SendCommandReadBulk(*port, env, cmd, flightnr,
+                                                 timeout_firstchar_ms,
                                                  buffer, buffersize, databaud);
   if (groesse <= 0)
     return 0;
@@ -107,10 +123,15 @@ VLA_XFR::flightget(void *buffer, int32 buffersize,
   // read signature
   env.Sleep(300);
 
+  /* Testing has shown that downloading the Signature does not support
+     BulkRate. It has to be done with standard IO Rate (9600)
+  */
   int sgr = Volkslogger::SendCommandReadBulk(*port, env, Volkslogger::cmd_SIG,
+                                             1000,
                                              (uint8_t *)buffer + groesse,
-                                             buffersize - groesse,
-                                             databaud);
+                                             buffersize - groesse);
+
+
   if (sgr <= 0)
     return 0;
 
@@ -136,7 +157,7 @@ VLA_XFR::VLA_XFR(Port &_port, unsigned _databaud, OperationEnvironment &_env)
 
 VLA_ERROR VLA_XFR::readinfo(void *buffer, int32 buffersize) {
   int nbytes = Volkslogger::SendCommandReadBulk(*port, env,
-                                                Volkslogger::cmd_INF,
+                                                Volkslogger::cmd_INF,1000,
                                                 buffer, buffersize);
   if (nbytes <= 0)
     return VLA_ERR_NODATA;
@@ -222,36 +243,53 @@ VLA_ERROR VLAPI::write_db_and_declaration() {
 }
 
 VLA_ERROR VLAPI::read_directory() {
+
   VLA_ERROR err = stillconnect();
   if(err != VLA_ERR_NOERR)
     return err;
 
   uint8_t dirbuffer[VLAPI_LOG_MEMSIZE];
-  err = readdir(dirbuffer, sizeof(dirbuffer));
+  int data_length = readdir(dirbuffer, sizeof(dirbuffer));
 
-  if(err == VLA_ERR_NOERR) {
-    int fcount = conv_dir(0,dirbuffer,1);
-    delete[] directory.flights;
-    directory.flights = NULL;
+
+  if (data_length == -1)
+    return VLA_ERR_MISC;
+
+  if(data_length > 0) {
+    directory.flights = conv_dir(dirbuffer,data_length,env);
+    int fcount = directory.flights.size();
     if(fcount>0) {
       directory.nflights = fcount;
-      directory.flights = new DIRENTRY[fcount];
-      conv_dir(directory.flights,dirbuffer,0);
-      err = VLA_ERR_NOERR;
+      return VLA_ERR_NOERR;
     }
     else {
       directory.nflights = 0;
-      err = VLA_ERR_NOFLIGHTS;
+      directory.flights.clear();
+      return VLA_ERR_NOFLIGHTS;
     }
   }
 
-  return err;
+  return VLA_ERR_MISC;
 
 }
 
 VLA_ERROR
 VLAPI::read_igcfile(const TCHAR *filename, int index, int secmode)
 {
+
+  tstring path = filename;
+
+  //Are there path delimiters present?
+  //If yes split pathname to check if directory exists
+
+  if (path.find_last_of(_T("/\\")) != tstring::npos)
+  {
+    tstring directory = path.substr( 0, path.find_last_of( _T("/\\") ));
+    // If directory does not yet exist. Create it.
+    if (!Directory::Exists(directory.c_str()))
+      Directory::Create(directory.c_str());
+  }
+
   FILE *outfile = _tfopen(filename,_T("wt"));
   if(!outfile)
     return VLA_ERR_FILE;
@@ -269,7 +307,7 @@ VLAPI::read_igcfile(const TCHAR *filename, int index, int secmode)
   word serno; long sp;
   long r;
   if(err == VLA_ERR_NOERR) {
-    r = convert_gcs(0,outfile,logbuffer,1,&serno,&sp);
+    r = convert_gcs(0,outfile,logbuffer,1,&serno,&sp,env);
     if(r>0) {
       err = VLA_ERR_NOERR;
       print_g_record(

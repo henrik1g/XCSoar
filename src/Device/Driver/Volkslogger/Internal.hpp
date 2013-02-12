@@ -29,13 +29,30 @@ Copyright_License {
 class VolksloggerDevice : public AbstractDevice {
 private:
   Port &port;
+  unsigned const bulkrate;
 
 public:
-  VolksloggerDevice(Port &_port):port(_port) {}
+  VolksloggerDevice(Port &_port, unsigned const _bulkrate)
+                    :port(_port), bulkrate(_bulkrate) {}
 
   virtual bool ParseNMEA(const char *line, struct NMEAInfo &info) override;
   virtual bool Declare(const Declaration &declaration, const Waypoint *home,
                        OperationEnvironment &env) override;
+  /**
+   * Read the list of stored flights from the Volkslogger
+   */
+  virtual bool ReadFlightList(RecordedFlightList &flight_list,
+                              OperationEnvironment &env) override;
+  /**
+   * Download flight from the Volkslogger
+   * @param flight Containing information which flight to download
+   * @param path Path with filename under which the flight shall be saved.
+   *        The directory must exist otherwise flight download will fail.
+   * @param env OperationEnvironment
+   */
+  virtual bool DownloadFlight(const RecordedFlightInfo &flight, const TCHAR *path,
+                              OperationEnvironment &env) override;
+
 };
 
 #endif

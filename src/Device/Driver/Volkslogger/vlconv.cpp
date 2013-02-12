@@ -224,7 +224,7 @@ public:
         // Add the timezone
         T_FDT.tm_min += zz_min;
         T_FDT.tm_isdst = -1;
-        //JMW TODO	mktime(&T_FDT);
+        mktime(&T_FDT);
         FDT[0] = T_FDT.tm_mday;
         FDT[1] = T_FDT.tm_mon + 1;
         FDT[2] = T_FDT.tm_year % 100;
@@ -512,7 +512,7 @@ const int actual_conv_version = 424;
 
 long
 convert_gcs(int igcfile_version, FILE *Ausgabedatei, uint8_t *bin_puffer,
-    int oo_fillin, word *serno, long *sp)
+    int oo_fillin, word *serno, long *sp, OperationEnvironment &env)
 {
   IGCHEADER igcheader;
   C_RECORD task;
@@ -582,6 +582,11 @@ convert_gcs(int igcfile_version, FILE *Ausgabedatei, uint8_t *bin_puffer,
   p = bin_puffer;
 
   do {
+
+    //Make user abort possible
+    if (env.IsCancelled())
+      return 0;
+
     Haupttyp = p[0] & rectyp_msk;
     switch (Haupttyp) {
     case rectyp_tnd:
@@ -868,6 +873,11 @@ convert_gcs(int igcfile_version, FILE *Ausgabedatei, uint8_t *bin_puffer,
   ende = 0;
   p = bin_puffer;
   do {
+
+    //Make user abort possible
+    if (env.IsCancelled())
+      return 0;
+
     Haupttyp = p[0] & rectyp_msk;
     switch (Haupttyp) {
     case rectyp_sep:
@@ -1012,10 +1022,12 @@ convert_gcs(int igcfile_version, FILE *Ausgabedatei, uint8_t *bin_puffer,
 }
 
 // Members of class DIR
-int
-conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
+std::vector<DIRENTRY>
+conv_dir(uint8_t *p, int32 const data_length, OperationEnvironment &env)
 {
-  int number_of_flights;
+  std::vector<DIRENTRY> flights;
+  flights.reserve(10);
+
   DIRENTRY de; // directory entry
   uint8_t Haupttyp, Untertyp;
   uint8_t l; // length of DS
@@ -1030,13 +1042,24 @@ conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
   memset(&timetm1, 0, sizeof(timetm1));
 
   int bfv = 0;
-  number_of_flights = 0;
   char pilot1[17];
   char pilot2[17];
   char pilot3[17];
   char pilot4[17];
   memset(&de, 0, sizeof(de));
-  while (1) {//number_of_flights < MAXDIRENTRY) {
+
+  int32 nbytes = 0;
+
+  while (nbytes < data_length) {
+
+    //Make user abort possible
+    if (env.IsCancelled()) {
+      //abort function
+      flights.clear();
+      return flights;
+    }
+
+
     Haupttyp = (p[0] & rectyp_msk);
     switch (Haupttyp) {
     case rectyp_sep: // Initialize Dir-Entry
@@ -1049,7 +1072,11 @@ conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
       de.takeoff = 0;
       bfv = p[0] & ~rectyp_msk;
       if (bfv > max_bfv)
-        return -1;
+      {
+        //abort function
+        flights.clear();
+        return flights;
+      }
       l = 1;
       break;
     case rectyp_vrt: // getim'ter variabler DS oder
@@ -1107,12 +1134,28 @@ conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
     case rectyp_pos:
       l = pos_ds_size[bfv][0];
       break;
+
+
+    /*
+     * This End Condition Statement does not seem to be
+     * valid. At least not for the tested Volkslogger.
+     * To have a valid condition the data_length is
+     * now known in conv_dir() and the loop will finish when the
+     * end of the data is reached.
+     * Maybe this end condition here is valid in special
+     * cases or on other hardware though.
+     * 
+     */
     case rectyp_poc:
+ 
       if (p[2] & 0x80) { // Endebedingung
-        return number_of_flights;
+        return flights;
+
       }
       l = pos_ds_size[bfv][1];
       break;
+
+
     case rectyp_tnd:
       // speichert in timetm1 den aktuellen tnd-DS ab
       temptime = 65536L * p[2] + 256L * p[3] + p[4];
@@ -1130,7 +1173,6 @@ conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
       l = 8;
       break;
     case rectyp_end:
-      if (!countonly) {
         // setzt firsttime und lasttime aufgrund der Werte im sta-DS
         temptime = 65536L * p[4] + 256L * p[5] + p[6]; // Aufzeichnungsbeginn
         de.firsttime = timetm1;
@@ -1167,15 +1209,16 @@ conv_dir(DIRENTRY* flights, uint8_t *p, int countonly)
         strcat(de.pilot, pilot3);
         strcat(de.pilot, pilot4);
 
-        flights[number_of_flights] = de;
-      }
-      number_of_flights++;
+      flights.push_back(de);
       l = 7;
       break;
     default:
-      return -1;
+      //abort function
+      flights.clear();
+      return flights;
     };
     p += l;
+    nbytes += l;
   }
-  return -1;
+  return flights;
 }

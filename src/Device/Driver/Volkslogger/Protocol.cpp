@@ -197,6 +197,7 @@ Volkslogger::WaitForACK(Port &port, OperationEnvironment &env)
 
 int
 Volkslogger::ReadBulk(Port &port, OperationEnvironment &env,
+                      const unsigned timeout_firstchar_ms,
                       void *buffer, unsigned max_length)
 {
   unsigned nbytes = 0;
@@ -207,10 +208,31 @@ Volkslogger::ReadBulk(Port &port, OperationEnvironment &env,
   memset(buffer, 0xff, max_length);
 
   uint8_t *p = (uint8_t *)buffer;
+
+  /**
+   * We need to wait longer for the first char to
+   * give the logger time to calculate security
+   * when downloading a log-file.
+   * Therefore timeout_firstchar is configurable
+   */
+
+
+  unsigned const TIMEOUT_NORMAL_MS = 1000;
+
+  unsigned const PROGRESS_BAR_RANGE = 1000;
+  env.SetProgressRange(PROGRESS_BAR_RANGE);
+
   while (!ende) {
     // Zeichen anfordern und darauf warten
-    if (!port.Write(ACK) ||
-        port.WaitRead(env, 1000) != Port::WaitResult::READY)
+
+    env.SetProgressPosition(nbytes % PROGRESS_BAR_RANGE);
+
+    if (!port.Write(ACK))
+      return -1;
+
+    // Set longer timeout on first char
+    unsigned timeout = start ? TIMEOUT_NORMAL_MS : timeout_firstchar_ms;
+    if (port.WaitRead(env, timeout) != Port::WaitResult::READY)
       return -1;
 
     int ch = port.GetChar();
@@ -285,6 +307,7 @@ Volkslogger::ReadBulk(Port &port, OperationEnvironment &env,
     }
   }
 
+  env.SetProgressPosition(PROGRESS_BAR_RANGE);
   env.Sleep(100);
 
   if (crc16 != 0)
@@ -294,6 +317,19 @@ Volkslogger::ReadBulk(Port &port, OperationEnvironment &env,
     return 0;
 
   // CRC am Ende abschneiden
+
+  /* Overwrite the checksum bytes which are not needed anymore.
+   * This is not necessary anymore since conv_dir() was
+   * fixed. However imo it is not a fault to have it.
+   * The CRC is not needed anymore but might be misinterpreted
+   * as data.
+   * Therefore I think it is a good idea to overwrite
+   * the CRC with 0xFF like the rest of the unused buffer
+   * space.
+   */
+  *(p-2) = 0xFF;
+  *(p-1) = 0xFF;
+
   return nbytes - 2;
 }
 
@@ -332,16 +368,18 @@ Volkslogger::WriteBulk(Port &port, OperationEnvironment &env,
 int
 Volkslogger::SendCommandReadBulk(Port &port, OperationEnvironment &env,
                                  Command cmd,
+                                 const unsigned timeout_firstchar_ms,
                                  void *buffer, unsigned max_length)
 {
   return SendCommand(port, env, cmd)
-    ? ReadBulk(port, env, buffer, max_length)
+    ? ReadBulk(port, env, timeout_firstchar_ms, buffer, max_length)
     : -1;
 }
 
 int
 Volkslogger::SendCommandReadBulk(Port &port, OperationEnvironment &env,
                                  Command cmd, uint8_t param1,
+                                 const unsigned timeout_firstchar_ms,
                                  void *buffer, unsigned max_length,
                                  unsigned baud_rate)
 {
@@ -362,7 +400,7 @@ Volkslogger::SendCommandReadBulk(Port &port, OperationEnvironment &env,
       return -1;
   }
 
-  int nbytes = ReadBulk(port, env, buffer, max_length);
+  int nbytes = ReadBulk(port, env, timeout_firstchar_ms, buffer, max_length);
 
   if (old_baud_rate != 0)
     port.SetBaudrate(old_baud_rate);
